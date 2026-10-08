@@ -1,0 +1,26 @@
+{
+  "name": "lp_bot",
+  "version": "1.0.0",
+  "description": "LP配平机器人 手机签名页（依赖与电脑端相同，用 package-lock.json 锁定）",
+  "main": "index.js",
+  "scripts": {
+    "build": "bash build.sh",
+    "test": "node test/guard.test.js && node test/link_compat.test.js",
+    "test:mainnet": "node test/prepare_mainnet.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@raydium-io/raydium-sdk-v2": "^0.2.73-alpha",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/web3.js": "^1.99.0",
+    "bn.js": "^5.2.5",
+    "decimal.js": "^10.6.0",
+    "nodemailer": "^10.0.16"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.23.0",
+    "esbuild": "^0.28.2"
+  }
+}

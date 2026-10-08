@@ -9,6 +9,10 @@ const POOL_ID = 'ApniVWuZbZoruTAJdyJcLBA4AVw4DKGdV5fHxo6qrAZT';
 const CLMM = 'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK';
 const MINT_A = 'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp'; // AAPLx (Token-2022)
 const MINT_B = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; // USDC
+// 池子的两个金库地址在池子创建时就固定了：写死，不信任 RPC 返回的
+const VAULT_A = '69u6oEwRayMozqCWF9Vny6qiYN5f18pZVUtboaDJkXuj';
+const VAULT_B = '3zBLzabogNNQ4s2zcuioXncdbTPED4jPx1x2J3Jn8Ezt';
+const MAX_RENT_LAMPORTS = 20000000; // 新建账户最多押 0.02 SOL（代币账户/NFT 账户租金远低于这个）
 const TOKEN = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const TOKEN22 = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 const ATA = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
@@ -57,7 +61,9 @@ function normalizeParams(o) {
     c: num(o.c, 0), e: num(o.e, 0), pl: o.pl || POOL_ID,
     p0: num(o.p, 0), wd: num(o.wd, 1), mx: num(o.mx, 1000), sl: num(o.sl, 0.5), dv: num(o.dv, 3),
     pf: num(o.pf, 100000), ms: num(o.ms, 0.05), sd: o.sd || null, su: num(o.su, 0), se: num(o.se, 0),
-    r: typeof o.r === 'string' && /^https:\/\/[^\s"'<>]+$/.test(o.r) ? o.r : null,
+    rf: num(o.rf, 0), sp: num(o.sp, 2),
+    // 链接没有签名，任何人都能改 # 后面的内容：不再使用链接里的 RPC 地址，只用本页内置的节点
+    r: null,
   };
   if (!/^[\w-]{8,80}$/.test(p.id)) throw new Error('链接缺少任务编号');
   if (!['withdraw', 'rebalance', 'open'].includes(p.a)) throw new Error('链接里的操作类型不认识');
@@ -73,6 +79,8 @@ function normalizeParams(o) {
   if (!(p.dv > 0 && p.dv <= 20)) p.dv = 3;
   if (!(p.pf >= 0 && p.pf <= 5e6)) p.pf = 100000;
   if (!(p.ms >= 0 && p.ms < 10)) p.ms = 0.05;
+  if (!(p.sp > 0 && p.sp < 50)) p.sp = 2;
+  if (!(p.rf > 0)) p.rf = 0;
   return p;
 }
 
@@ -145,6 +153,7 @@ async function readPool(conn) {
   if (info.owner.toBase58() !== CLMM) throw new Error('池子账户不属于 Raydium CLMM，已拒绝');
   const r = PoolInfoLayout.decode(info.data);
   if (r.mintA.toBase58() !== MINT_A || r.mintB.toBase58() !== MINT_B) throw new Error('池子代币不对，已拒绝');
+  if (r.vaultA.toBase58() !== VAULT_A || r.vaultB.toBase58() !== VAULT_B) throw new Error('池子金库地址不对（RPC 数据可疑），已拒绝');
   const dA = r.mintDecimalsA, dB = r.mintDecimalsB;
   const sqrtP = Number(BigInt(r.sqrtPriceX64.toString())) / Q64;
   return { raw: r, dA, dB, tick: r.tickCurrent, spacing: r.tickSpacing, sqrtP, P: sqrtP * sqrtP * 10 ** (dA - dB),
@@ -317,6 +326,7 @@ const b58 = k => (typeof k === 'string' ? k : k.toBase58());
 const hex8 = d => Array.from(d.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
 const u32le = d => (d.length < 4 ? -1 : (d[0] | (d[1] << 8) | (d[2] << 16) | (d[3] << 24)) >>> 0);
 const u64le = (d, off) => { let v = 0n; for (let i = 7; i >= 0; i--) v = (v << 8n) + BigInt(d[off + i] || 0); return v; };
+const pk32 = (d, off) => (d.length < off + 32 ? null : new PublicKey(d.slice(off, off + 32)).toBase58());
 
 async function resolveKeys(conn, vtx) {
   const msg = vtx.message;
@@ -373,15 +383,25 @@ function assertSafeTx(vtx, keys, ctx) {
       else throw new Error('交易含有未允许的计算预算指令，已拒绝');
     } else if (pid === SYSTEM) {
       const disc = u32le(d);
-      if (disc === 0) { if (acc(0) !== owner || !okSigners.has(acc(1))) throw new Error('交易含有可疑的建账户指令，已拒绝'); names.push('System.createAccount'); }
-      else if (disc === 3) { if (acc(0) !== owner) throw new Error('交易含有可疑的建账户指令，已拒绝'); names.push('System.createAccountWithSeed'); }
+      if (disc === 0) { // lamports u64 @4, space u64 @12, 所属程序 @20
+        if (acc(0) !== owner || !okSigners.has(acc(1)) || acc(1) === owner) throw new Error('交易含有可疑的建账户指令，已拒绝');
+        if (![TOKEN, TOKEN22].includes(pk32(d, 20))) throw new Error('建账户的所属程序不是代币程序，已拒绝');
+        if (u64le(d, 4) > BigInt(MAX_RENT_LAMPORTS)) throw new Error('建账户押的 SOL 太多，已拒绝');
+        names.push('System.createAccount');
+      } else if (disc === 3) { // base @4, seed(u64 长度+内容) @36, lamports, space, 所属程序
+        if (acc(0) !== owner || pk32(d, 4) !== owner) throw new Error('交易含有可疑的建账户指令，已拒绝');
+        const len = Number(u64le(d, 36)), o = 44 + len;
+        if (!(len <= 32) || ![TOKEN, TOKEN22].includes(pk32(d, o + 16))) throw new Error('建账户的所属程序不是代币程序，已拒绝');
+        if (u64le(d, o) > BigInt(MAX_RENT_LAMPORTS)) throw new Error('建账户押的 SOL 太多，已拒绝');
+        names.push('System.createAccountWithSeed');
+      }
       else throw new Error(disc === 2 || disc === 11 ? '交易含有 SOL 转账，已拒绝' : '交易含有未允许的系统指令 ' + disc + '，已拒绝');
     } else if (pid === TOKEN || pid === TOKEN22) {
       const t = d.length ? d[0] : -1;
       if (t === 3 || t === 12) { const dest = t === 3 ? acc(1) : acc(2); if (!tokDest.has(dest)) throw new Error('交易含有把代币转给别人的指令，已拒绝'); names.push('Token.transfer'); }
       else if (t === 9) { if (acc(1) !== owner) throw new Error('关闭代币账户的退款地址不是你的钱包，已拒绝'); names.push('Token.closeAccount'); }
       else if (t === 17) names.push('Token.syncNative');
-      else if (t === 1 || t === 16 || t === 18) { const o = t === 1 ? acc(2) : null; if (t === 1 && o !== owner) throw new Error('建代币账户的所有者不是你，已拒绝'); names.push('Token.initAccount'); }
+      else if (t === 1 || t === 16 || t === 18) { const o = t === 1 ? acc(2) : pk32(d, 1); if (o !== owner) throw new Error('建代币账户的所有者不是你，已拒绝'); names.push('Token.initAccount'); }
       else throw new Error('交易含有未允许的代币指令 ' + t + '，已拒绝');
     } else if (pid === ATA) {
       if (!(d.length === 0 || d[0] === 0 || d[0] === 1)) throw new Error('交易含有未允许的 ATA 指令，已拒绝');
@@ -453,6 +473,11 @@ async function prepareStep(conn, p, step, opts = {}) {
     if (p.p0 > 0 && Math.abs(P / p.p0 - 1) * 100 > p.dv) return { ...base, status: 'refuse', reason: `池子价格从 ${fmt(p.p0)} 变到 ${fmt(P)}，变化超过 ${p.dv}%。为安全已停止，请等机器人重新发链接。` };
     if (w.sol < p.ms) return { ...base, status: 'refuse', reason: `SOL 余额 ${fmt(w.sol, 4)} 低于保留 ${p.ms}，请先补一点 SOL。` };
     if (w.positions.some(q => q.nft === p.n)) return { ...base, status: 'refuse', reason: '要撤的仓位还在，先完成撤仓这一步。' };
+    // 策略只持有一个仓位：池子里已经有仓位就不再兑换/开仓（防止两个链接各开一个）
+    if (w.positions.length) return { ...base, status: 'refuse', reason: `钱包在这个池子里已经有 ${w.positions.length} 个仓位，不再兑换或开新仓。不需要操作。` };
+    // 23:00 参考价止损：价格到了参考价下方 sp% 就不再兑换/开仓（电脑端发链接之后价格继续跌的情况）
+    if (!(p.rf > 0)) return { ...base, status: 'refuse', reason: '链接里没有本轮 23:00 参考价，无法判断止损，不兑换也不开仓。请更新电脑上的机器人。' };
+    if (P <= p.rf * (1 - p.sp / 100)) return { ...base, status: 'refuse', reason: `池子价格 ${fmt(P)} 已经比 23:00 参考价 ${fmt(p.rf)} 低 ${fmt((1 - P / p.rf) * 100)}%（止损线 ${p.sp}%），本轮不再兑换或开仓。不需要操作。` };
   }
   const cfg = { widthPct: p.wd, maxAmountUsd: p.mx };
   const pl = planRebalance(P, w.x, w.y, cfg);
@@ -518,7 +543,7 @@ async function simulate(conn, vtx) {
 }
 
 module.exports = {
-  POOL_ID, CLMM, MINT_A, MINT_B, ALLOWED_PROGRAMS, TOKEN, TOKEN22, ATA, SYSTEM, CB, MEMO, DISC,
+  POOL_ID, CLMM, MINT_A, MINT_B, VAULT_A, VAULT_B, ALLOWED_PROGRAMS, TOKEN, TOKEN22, ATA, SYSTEM, CB, MEMO, DISC,
   encodeLink, decodeLink, normalizeParams, stepsFor, linkCheck, bjStamp,
   makeFetch, makeConnection, readPool, readWallet, positionCreatedAt,
   targetShare, planRebalance, rangeTicks,
