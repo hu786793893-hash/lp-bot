@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>LP配平 · 手机签名</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;margin:0;background:#0f1020;color:#eee;}
+  .wrap{max-width:520px;margin:0 auto;padding:20px 16px 60px;}
+  h1{font-size:22px;margin:6px 0 12px;}
+  .card{background:#1b1d36;border-radius:14px;padding:14px 16px;margin:12px 0;line-height:1.7;font-size:15px;word-break:break-word;}
+  .step{padding:3px 0;font-size:15px}
+  .btn{display:block;width:100%;box-sizing:border-box;border:0;border-radius:12px;padding:16px;font-size:18px;font-weight:600;color:#fff;background:linear-gradient(135deg,#7c5cff,#ab9ff2);margin:14px 0;text-align:center;text-decoration:none;cursor:pointer;}
+  .btn.bnb{background:#f0b90b;color:#111;}
+  .btn.sec{background:transparent;border:1px solid #6b62b8;color:#c9c2ff;font-size:15px;padding:12px;font-weight:500;}
+  .btn:disabled{opacity:.5}
+  .warn{background:#4a3500;color:#ffd666;border-radius:10px;padding:12px;margin:10px 0;font-size:15px;line-height:1.6;}
+  .err{background:#4a0f14;color:#ff9aa2;border-radius:10px;padding:12px;margin:10px 0;font-size:15px;word-break:break-all;}
+  .ok{background:#0f3a24;color:#8ff0b5;border-radius:10px;padding:12px;margin:10px 0;font-size:15px;word-break:break-all;}
+  .mono{font-family:Menlo,monospace;font-size:12px;word-break:break-all;color:#bbb;}
+  .urlrow{display:flex;gap:8px;align-items:center;margin:8px 0;}
+  .urlrow input{flex:1;min-width:0;background:#0f1020;color:#eee;border:1px solid #444;border-radius:8px;padding:10px;font-size:13px;font-family:Menlo,monospace;}
+  .urlrow button{background:#f0b90b;color:#111;border:0;border-radius:8px;padding:10px 14px;font-size:15px;font-weight:600;}
+  ol{margin:6px 0 0 0;padding-left:22px;}
+  a{color:#9ecbff;}
+  .small{font-size:13px;color:#999;}
+  #summary{border:1px solid #7c5cff;}
+  #status{font-size:14px;color:#aaa;margin:6px 0;}
+  #log{font-size:12px;color:#888;white-space:pre-wrap;word-break:break-all;}
+  .hidden{display:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LP配平 · 手机签名</h1>
+  <div class="card" id="info">正在读取链接…</div>
+  <div class="card" id="steps"></div>
+  <div class="card hidden" id="summary"></div>
+  <div class="card small">本页是静态网页，不保存任何东西，也拿不到你的私钥。每一步只会让你签：这个池子的撤仓、兑换或开仓（外加计算预算/建代币账户）。本页会自动检查交易，发现把 SOL 或代币转给别人的指令就直接拒绝。钱包弹窗里如果看到转账给陌生地址，不要签。</div>
+  <div id="status">正在检测钱包…</div>
+  <div id="noProvider" class="hidden">
+    <div class="warn">当前浏览器里没有检测到钱包。请在币安 App 的钱包浏览器里打开本页。</div>
+    <a id="openBinance" class="btn bnb" href="#">在币安钱包中打开</a>
+    <div class="small">如果点了没反应，试试 <a id="openBinanceBnc" href="#">备用唤起链接</a>，或用下面的手动方式。</div>
+    <div class="card">
+      <b>手动方式：</b>
+      <ol>
+        <li>复制下面的完整网址（包括 # 后面的部分）</li>
+        <li>打开币安 App → 钱包 → 发现/浏览器</li>
+        <li>在地址栏粘贴网址并打开</li>
+      </ol>
+      <div class="urlrow"><input id="pageUrl" readonly><button id="copyBtn" type="button">复制</button></div>
+    </div>
+    <a id="openPhantom" class="btn sec" href="#">已安装 Phantom？在 Phantom 中打开</a>
+  </div>
+  <button id="mainBtn" class="btn" type="button" disabled>正在加载…</button>
+  <div id="msgs"></div>
+  <details class="small"><summary>技术日志</summary><div id="log"></div></details>
+</div>
+<script src="lpsign.js?v=__VER__"></script>
+</body>
+</html>
