@@ -304,7 +304,7 @@ $('mainBtn').addEventListener('click', async () => {
   steps = C.stepsFor(P);
   $('info').innerHTML = `<b>${esc(ACTION_NAME[P.a])}</b><br>钱包：<span class="mono">${esc(P.w)}</span><br>` +
     (P.n ? `要撤的仓位：<span class="mono">${esc(P.n)}</span><br>` : '') +
-    `区间宽度 ±${P.wd}%，单次最多 $${P.mx}，滑点上限 ${P.sl}%` + (P.rf > 0 ? `，23:00 参考价 ${P.rf}（低于 ${(P.rf * (1 - P.sp / 100)).toFixed(2)} 不再兑换/开仓）` : '') + `<br>链接有效期到 <b>${C.bjStamp(P.e)}</b>（北京时间）` +
+    `区间宽度 ±${P.wd}%，单次最多 $${P.mx}，滑点上限 ${P.sl}%` + (P.rf > 0 ? `，本轮开仓价 ${P.rf}（低于 ${(P.rf * (1 - P.sp / 100)).toFixed(2)} 不再兑换/开仓）` : '') + `<br>链接有效期到 <b>${C.bjStamp(P.e)}</b>（北京时间）` +
     `<div class="small">池子：Raydium CLMM AAPLx/USDC 0.1%（${C.POOL_ID.slice(0, 6)}…${C.POOL_ID.slice(-5)}）。每一步签名前都会重新读链核对，不需要的步骤会自动跳过。</div>`;
   renderSteps();
   const lc = C.linkCheck(P, Math.floor(Date.now() / 1000));

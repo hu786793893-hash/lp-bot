@@ -59,7 +59,7 @@ function normalizeParams(o) {
   const p = {
     id: String(o.id || ''), a: o.a, k: o.k || null, n: o.n || null, w: o.w,
     c: num(o.c, 0), e: num(o.e, 0), pl: o.pl || POOL_ID,
-    p0: num(o.p, 0), wd: num(o.wd, 1), mx: num(o.mx, 1000), sl: num(o.sl, 0.5), dv: num(o.dv, 3),
+    p0: num(o.p, 0), wd: num(o.wd, 1), mx: num(o.mx, 1000), sl: num(o.sl, 0.5), dv: num(o.dv, 2),
     pf: num(o.pf, 100000), ms: num(o.ms, 0.05), sd: o.sd || null, su: num(o.su, 0), se: num(o.se, 0),
     rf: num(o.rf, 0), sp: num(o.sp, 2),
     // 链接没有签名，任何人都能改 # 后面的内容：不再使用链接里的 RPC 地址，只用本页内置的节点
@@ -76,7 +76,7 @@ function normalizeParams(o) {
   if (!(p.wd > 0 && p.wd < 50)) throw new Error('区间宽度参数不正确');
   if (!(p.sl > 0 && p.sl <= 5)) throw new Error('滑点参数应在 0–5%');
   if (!(p.mx > 0)) throw new Error('单次最大金额参数不正确');
-  if (!(p.dv > 0 && p.dv <= 20)) p.dv = 3;
+  if (!(p.dv > 0 && p.dv <= 20)) p.dv = 2;
   if (!(p.pf >= 0 && p.pf <= 5e6)) p.pf = 100000;
   if (!(p.ms >= 0 && p.ms < 10)) p.ms = 0.05;
   if (!(p.sp > 0 && p.sp < 50)) p.sp = 2;
@@ -475,9 +475,10 @@ async function prepareStep(conn, p, step, opts = {}) {
     if (w.positions.some(q => q.nft === p.n)) return { ...base, status: 'refuse', reason: '要撤的仓位还在，先完成撤仓这一步。' };
     // 策略只持有一个仓位：池子里已经有仓位就不再兑换/开仓（防止两个链接各开一个）
     if (w.positions.length) return { ...base, status: 'refuse', reason: `钱包在这个池子里已经有 ${w.positions.length} 个仓位，不再兑换或开新仓。不需要操作。` };
-    // 23:00 参考价止损：价格到了参考价下方 sp% 就不再兑换/开仓（电脑端发链接之后价格继续跌的情况）
-    if (!(p.rf > 0)) return { ...base, status: 'refuse', reason: '链接里没有本轮 23:00 参考价，无法判断止损，不兑换也不开仓。请更新电脑上的机器人。' };
-    if (P <= p.rf * (1 - p.sp / 100)) return { ...base, status: 'refuse', reason: `池子价格 ${fmt(P)} 已经比 23:00 参考价 ${fmt(p.rf)} 低 ${fmt((1 - P / p.rf) * 100)}%（止损线 ${p.sp}%），本轮不再兑换或开仓。不需要操作。` };
+    // 止损：参考价 = 本轮第一次开仓时的池子价格。价格到了参考价下方 sp% 就不再兑换/开仓（电脑端发链接之后价格继续跌的情况）。
+    // 本轮第一次开仓没有参考价（不受止损限制）；配平一定有参考价，链接里没有就拒绝。
+    if (p.a === 'rebalance' && !(p.rf > 0)) return { ...base, status: 'refuse', reason: '配平链接里没有本轮开仓参考价，无法判断止损，不兑换也不开仓。请更新电脑上的机器人。' };
+    if (p.rf > 0 && P <= p.rf * (1 - p.sp / 100)) return { ...base, status: 'refuse', reason: `池子价格 ${fmt(P)} 已经比本轮开仓价 ${fmt(p.rf)} 低 ${fmt((1 - P / p.rf) * 100)}%（止损线 ${p.sp}%），本轮不再兑换或开仓。不需要操作。` };
   }
   const cfg = { widthPct: p.wd, maxAmountUsd: p.mx };
   const pl = planRebalance(P, w.x, w.y, cfg);

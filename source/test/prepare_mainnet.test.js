@@ -7,7 +7,7 @@ const EMPTY = process.env.WALLET_NO_POSITION || 'S7vYFFWH6BjJyEsdrPQpqpYTqLTrPRK
   const conn = C.makeConnection({});
   const pool = await C.readPool(conn);
   const now = Math.floor(Date.now() / 1000);
-  const base = { id: 'testtask_abcdefgh', c: now - 60, e: now + 1800, pl: C.POOL_ID, p: pool.P, wd: 1, mx: 200, sl: 0.5, dv: 3, pf: 100000, ms: 0.01, sp: 2, a: 'open' };
+  const base = { id: 'testtask_abcdefgh', c: now - 60, e: now + 1800, pl: C.POOL_ID, p: pool.P, wd: 1, mx: 200, sl: 0.5, pf: 100000, ms: 0.01, sp: 2, a: 'open' };
   const P = q => C.normalizeParams(q);
   const wE = await C.readWallet(conn, EMPTY, pool);
   if (wE.positions.length) { console.log('skip: test wallet now has positions'); return; }
@@ -16,9 +16,14 @@ const EMPTY = process.env.WALLET_NO_POSITION || 'S7vYFFWH6BjJyEsdrPQpqpYTqLTrPRK
   assert.equal(r.status, 'refuse'); assert.ok(/止损线/.test(r.reason), r.reason); console.log('  拒绝 ✓ 止损线下不开仓');
   r = await C.prepareStep(conn, P({ ...base, w: EMPTY, k: 'swap', rf: pool.P * 1.03, su: 50 }), 'swap');
   assert.equal(r.status, 'refuse'); assert.ok(/止损线/.test(r.reason)); console.log('  拒绝 ✓ 止损线下不兑换');
-  // 2) 链接里没有参考价 → 拒绝
+  // 2) 配平链接里没有参考价 → 拒绝；本轮第一次开仓没有参考价 → 允许
+  r = await C.prepareStep(conn, P({ ...base, w: EMPTY, a: 'rebalance', k: 'open' }), 'open');
+  assert.equal(r.status, 'refuse'); assert.ok(/参考价/.test(r.reason)); console.log('  拒绝 ✓ 配平缺参考价');
   r = await C.prepareStep(conn, P({ ...base, w: EMPTY, k: 'open' }), 'open');
-  assert.equal(r.status, 'refuse'); assert.ok(/参考价/.test(r.reason)); console.log('  拒绝 ✓ 缺参考价');
+  assert.equal(r.status, 'build', r.reason); console.log('  通过 ✓ 第一次开仓不需要参考价');
+  // 价格偏离：默认容忍 2%
+  r = await C.prepareStep(conn, P({ ...base, w: EMPTY, k: 'open', p: pool.P * 1.025, dv: undefined }), 'open');
+  assert.equal(r.status, 'refuse'); assert.ok(/变化超过 2%/.test(r.reason), r.reason); console.log('  拒绝 ✓ 价格偏离 >2%');
   // 3) 参考价正常（现价在止损线上方）→ 照常构造开仓
   r = await C.prepareStep(conn, P({ ...base, w: EMPTY, k: 'open', rf: pool.P * 1.01 }), 'open');
   assert.equal(r.status, 'build', r.reason); const sim = await C.simulate(conn, r.built.tx); assert.equal(sim.err, null); console.log('  通过 ✓ 正常开仓，模拟成功', sim.units, 'CU');
