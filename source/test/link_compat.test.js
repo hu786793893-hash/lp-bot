@@ -8,7 +8,7 @@ const S = require(path.join(SRC, 'strategy'));
 const C = require('../core');
 const now = Date.now();
 const cfg = { ...S.DEFAULTS, rpcUrl: 'https://my-private-rpc.example.com' };
-for (const [action, kind, nft] of [['rebalance', 'withdraw', 'EdYT9hoPYNFX4HqyxFccpPxthbivBb3cWK5iKwjMXTNx'], ['open', 'swap', null], ['open', 'open', null], ['withdraw', 'withdraw', 'EdYT9hoPYNFX4HqyxFccpPxthbivBb3cWK5iKwjMXTNx'], ['rebalance', 'open', null]]) {
+for (const [action, kind, nft] of [['rebalance', 'withdraw', 'EdYT9hoPYNFX4HqyxFccpPxthbivBb3cWK5iKwjMXTNx'], ['open', 'swap', null], ['open', 'open', null], ['withdraw', 'withdraw', 'EdYT9hoPYNFX4HqyxFccpPxthbivBb3cWK5iKwjMXTNx'], ['rebalance', 'open', null], ['flatten', 'withdraw', 'EdYT9hoPYNFX4HqyxFccpPxthbivBb3cWK5iKwjMXTNx'], ['flatten', 'swap', null]]) {
   const task = SF.makeTask({ action, kind, nft, wallet: cfg.walletAddress, summary: '中文摘要', link: { p: 337.1234567, sd: 'sell', su: 12.345, se: now + 3600e3, dv: 2, rf: 336.98712 } }, now, 30);
   const { url, local, isStatic } = SF.taskLink(cfg, 18766, task);
   assert.ok(isStatic && url.startsWith('https://hu786793893-hash.github.io/lp-bot/sign.html#v1.'));
@@ -23,7 +23,8 @@ for (const [action, kind, nft] of [['rebalance', 'withdraw', 'EdYT9hoPYNFX4HqyxF
   assert.equal(p.rf, 336.9871); assert.equal(p.sp, 2);
   assert.equal(C.normalizeParams({ ...raw, dv: undefined }).dv, 2, 'default price-drift tolerance 2%');
   assert.equal(p.ms, cfg.minSolReserve); assert.equal(p.pf, cfg.priorityMicroLamports);
-  assert.deepStrictEqual(C.stepsFor(p), action === 'withdraw' ? ['withdraw'] : action === 'rebalance' ? ({ withdraw: ['withdraw', 'swap', 'open'], open: ['open'] })[kind] : ({ swap: ['swap', 'open'], open: ['open'] })[kind]);
+  const steps = { withdraw: { withdraw: ['withdraw'] }, flatten: { withdraw: ['withdraw', 'swap'], swap: ['swap'] }, rebalance: { withdraw: ['withdraw', 'swap', 'open'], open: ['open'] }, open: { swap: ['swap', 'open'], open: ['open'] } };
+  assert.deepStrictEqual(C.stepsFor(p), steps[action][kind]);
   assert.equal(local, 'http://127.0.0.1:18766/s/' + task.id);
 }
 console.log('link compat test passed');

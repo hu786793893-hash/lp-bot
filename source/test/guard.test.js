@@ -72,6 +72,8 @@ assert.equal(C.normalizeParams(good).rf, 0);
 assert.deepStrictEqual(C.stepsFor(C.normalizeParams({ ...good, k: 'swap' })), ['swap', 'open']);
 assert.deepStrictEqual(C.stepsFor(C.normalizeParams({ ...good, a: 'open', k: 'open', n: null })), ['open']);
 assert.deepStrictEqual(C.stepsFor(C.normalizeParams({ ...good, a: 'withdraw' })), ['withdraw']);
+assert.deepStrictEqual(C.stepsFor(C.normalizeParams({ ...good, a: 'flatten' })), ['withdraw', 'swap']);
+assert.deepStrictEqual(C.stepsFor(C.normalizeParams({ ...good, a: 'flatten', k: 'swap', n: null })), ['swap']);
 // 配平公式
 const pl = C.planRebalance(337, 1, 0, { widthPct: 1, maxAmountUsd: 1000 });
 assert.ok(Math.abs(pl.w - 0.4975) < 0.001 && pl.side === 'sell' && Math.abs(pl.delta - (337 - pl.w * 337)) < 1e-9);

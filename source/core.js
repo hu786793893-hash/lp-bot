@@ -66,11 +66,11 @@ function normalizeParams(o) {
     r: null,
   };
   if (!/^[\w-]{8,80}$/.test(p.id)) throw new Error('链接缺少任务编号');
-  if (!['withdraw', 'rebalance', 'open'].includes(p.a)) throw new Error('链接里的操作类型不认识');
+  if (!['withdraw', 'rebalance', 'open', 'flatten'].includes(p.a)) throw new Error('链接里的操作类型不认识');
   if (p.k && !['withdraw', 'swap', 'open'].includes(p.k)) throw new Error('链接里的步骤不认识');
   if (!isAddr(p.w)) throw new Error('链接里的钱包地址不正确');
   if (p.pl !== POOL_ID) throw new Error('链接里的池子不是 AAPLx/USDC 池子，已拒绝');
-  if ((p.a === 'withdraw' || p.a === 'rebalance') && (p.k || 'withdraw') === 'withdraw' && !isAddr(p.n)) throw new Error('链接缺少要撤的仓位编号');
+  if ((p.a === 'withdraw' || p.a === 'rebalance' || (p.a === 'flatten' && (p.k || 'withdraw') === 'withdraw')) && (p.k || 'withdraw') === 'withdraw' && !isAddr(p.n)) throw new Error('链接缺少要撤的仓位编号');
   if (p.n && !isAddr(p.n)) throw new Error('仓位编号不正确');
   if (!(p.e > 0 && p.c > 0 && p.e > p.c)) throw new Error('链接缺少有效期');
   if (!(p.wd > 0 && p.wd < 50)) throw new Error('区间宽度参数不正确');
@@ -86,7 +86,7 @@ function normalizeParams(o) {
 
 /** 这个链接要做的步骤（按顺序）。 */
 function stepsFor(p) {
-  const all = p.a === 'withdraw' ? ['withdraw'] : p.a === 'rebalance' ? ['withdraw', 'swap', 'open'] : ['swap', 'open'];
+  const all = p.a === 'withdraw' ? ['withdraw'] : p.a === 'flatten' ? ['withdraw', 'swap'] : p.a === 'rebalance' ? ['withdraw', 'swap', 'open'] : ['swap', 'open'];
   const first = p.k || all[0];
   const i = all.indexOf(first);
   return i < 0 ? all : all.slice(i);
@@ -464,21 +464,36 @@ async function prepareStep(conn, p, step, opts = {}) {
       `\n最少收到 ${fmt(b.info.minA, 4)} AAPLx + ${fmt(b.info.minB)} USDC（滑点上限 ${p.sl}%）。`;
     return finish(conn, p, base, b, summary, { closePda: pos.pda });
   }
-  if (fresh.length) {
+  if (fresh.length && p.a !== 'flatten') {
     const q = fresh[0];
     return { ...base, status: 'done', reason: `不需要操作（已完成）：钱包里已经有一笔新开的仓位，区间 ${fmt(q.lo)} – ${fmt(q.hi)}${q.inRange ? '（在区间内）' : '（不在区间内）'}。` };
   }
   if (step === 'swap' || step === 'open') {
-    if (p.se && nowSec >= p.se) return { ...base, status: 'refuse', reason: `已经过了本轮开仓时段（到 ${bjStamp(p.se)} 北京时间），不再兑换或开仓。` };
+    const exiting = p.a === 'flatten';
+    if (!exiting && p.se && nowSec >= p.se) return { ...base, status: 'refuse', reason: `已经过了本轮开仓时段（到 ${bjStamp(p.se)} 北京时间），不再兑换或开仓。` };
     if (p.p0 > 0 && Math.abs(P / p.p0 - 1) * 100 > p.dv) return { ...base, status: 'refuse', reason: `池子价格从 ${fmt(p.p0)} 变到 ${fmt(P)}，变化超过 ${p.dv}%。为安全已停止，请等机器人重新发链接。` };
     if (w.sol < p.ms) return { ...base, status: 'refuse', reason: `SOL 余额 ${fmt(w.sol, 4)} 低于保留 ${p.ms}，请先补一点 SOL。` };
-    if (w.positions.some(q => q.nft === p.n)) return { ...base, status: 'refuse', reason: '要撤的仓位还在，先完成撤仓这一步。' };
-    // 策略只持有一个仓位：池子里已经有仓位就不再兑换/开仓（防止两个链接各开一个）
-    if (w.positions.length) return { ...base, status: 'refuse', reason: `钱包在这个池子里已经有 ${w.positions.length} 个仓位，不再兑换或开新仓。不需要操作。` };
-    // 止损：参考价 = 本轮第一次开仓时的池子价格。价格到了参考价下方 sp% 就不再兑换/开仓（电脑端发链接之后价格继续跌的情况）。
-    // 本轮第一次开仓没有参考价（不受止损限制）；配平一定有参考价，链接里没有就拒绝。
-    if (p.a === 'rebalance' && !(p.rf > 0)) return { ...base, status: 'refuse', reason: '配平链接里没有本轮开仓参考价，无法判断止损，不兑换也不开仓。请更新电脑上的机器人。' };
-    if (p.rf > 0 && P <= p.rf * (1 - p.sp / 100)) return { ...base, status: 'refuse', reason: `池子价格 ${fmt(P)} 已经比本轮开仓价 ${fmt(p.rf)} 低 ${fmt((1 - P / p.rf) * 100)}%（止损线 ${p.sp}%），本轮不再兑换或开仓。不需要操作。` };
+    if (p.n && w.positions.some(q => q.nft === p.n)) return { ...base, status: 'refuse', reason: '要撤的仓位还在，先完成撤仓这一步。' };
+    // 策略只持有一个仓位：池子里已经有仓位就不再兑换/开仓（防止两个链接各开一个）。撤仓卖出时还有别的仓位就先跳过卖出。
+    if (w.positions.length) {
+      if (exiting) return { ...base, status: 'skip', reason: `池子里还有 ${w.positions.length} 个仓位，先撤完再卖苹果。` };
+      return { ...base, status: 'refuse', reason: `钱包在这个池子里已经有 ${w.positions.length} 个仓位，不再兑换或开新仓。不需要操作。` };
+    }
+    // 止损只拦住开仓和配平。撤仓后的卖出是为了离开盘波动，价格跌了也要换成美元。
+    if (!exiting && p.a === 'rebalance' && !(p.rf > 0)) return { ...base, status: 'refuse', reason: '配平链接里没有本轮开仓参考价，无法判断止损，不兑换也不开仓。请更新电脑上的机器人。' };
+    if (!exiting && p.rf > 0 && P <= p.rf * (1 - p.sp / 100)) return { ...base, status: 'refuse', reason: `池子价格 ${fmt(P)} 已经比本轮开仓价 ${fmt(p.rf)} 低 ${fmt((1 - P / p.rf) * 100)}%（止损线 ${p.sp}%），本轮不再兑换或开仓。不需要操作。` };
+  }
+  if (p.a === 'flatten' && step === 'swap') {
+    const usd = w.x * P;
+    if (!(usd >= 1)) return { ...base, status: 'skip', reason: `不需要卖出：钱包里 ${fmt(w.x, 4)} AAPLx，不到 1 美元。` };
+    const rawIn = Number(w.rawA);
+    if (!(rawIn > 0)) return { ...base, status: 'skip', reason: '钱包里没有可卖的 AAPLx。' };
+    const ray = await loadRaydium(conn, p.w);
+    const b = await buildSwap(ray, p, 'sell', rawIn);
+    const summary = `把钱包里的苹果全部换成美元：卖出 ${fmt(b.info.inH, 6)} 个 ${TK}（约 $${fmt(b.info.inH * P)}），换回约 ${fmt(b.info.outH)} USDC，最少 ${fmt(b.info.minOut)} USDC。` +
+      `\n池子价格 ${fmt(P)}，成交价约 ${fmt(b.info.execPrice)}（含 0.1% 池子手续费，滑点上限 ${p.sl}%）。` +
+      `\n这一步只卖出，不开新仓。币只在你钱包和池子之间流动，不会转到别人的地址。`;
+    return finish(conn, p, base, b, summary, {});
   }
   const cfg = { widthPct: p.wd, maxAmountUsd: p.mx };
   const pl = planRebalance(P, w.x, w.y, cfg);

@@ -70,7 +70,7 @@ $('copyBtn').addEventListener('click', function () {
 let conn = null;
 let P = null, steps = [], cur = 0, sel = null, wc = null, prepared = null, busy = false, finished = false;
 const STEP_NAME = { withdraw: '撤仓', swap: '兑换', open: '开仓' };
-const ACTION_NAME = { withdraw: '每日撤仓', rebalance: '出界配平（撤仓 → 兑换 → 开仓）', open: '开仓（需要时先兑换）' };
+const ACTION_NAME = { withdraw: '每日撤仓', flatten: '撤仓并卖出（撤仓 → 把苹果换成美元）', rebalance: '出界配平（撤仓 → 兑换 → 开仓）', open: '开仓（需要时先兑换）' };
 const stepState = {};
 
 function renderSteps() {
@@ -304,7 +304,7 @@ $('mainBtn').addEventListener('click', async () => {
   steps = C.stepsFor(P);
   $('info').innerHTML = `<b>${esc(ACTION_NAME[P.a])}</b><br>钱包：<span class="mono">${esc(P.w)}</span><br>` +
     (P.n ? `要撤的仓位：<span class="mono">${esc(P.n)}</span><br>` : '') +
-    `区间宽度 ±${P.wd}%，单次最多 $${P.mx}，滑点上限 ${P.sl}%` + (P.rf > 0 ? `，本轮开仓价 ${P.rf}（低于 ${(P.rf * (1 - P.sp / 100)).toFixed(2)} 不再兑换/开仓）` : '') + `<br>链接有效期到 <b>${C.bjStamp(P.e)}</b>（北京时间）` +
+    (P.a === 'flatten' ? '撤仓后把钱包里的苹果全部换成美元，不开新仓。' : `区间宽度 ±${P.wd}%，单次最多 $${P.mx}，滑点上限 ${P.sl}%` + (P.rf > 0 ? `，本轮开仓价 ${P.rf}（低于 ${(P.rf * (1 - P.sp / 100)).toFixed(2)} 不再兑换/开仓）` : '')) + `<br>链接有效期到 <b>${C.bjStamp(P.e)}</b>（北京时间）` +
     `<div class="small">池子：Raydium CLMM AAPLx/USDC 0.1%（${C.POOL_ID.slice(0, 6)}…${C.POOL_ID.slice(-5)}）。每一步签名前都会重新读链核对，不需要的步骤会自动跳过。</div>`;
   renderSteps();
   const lc = C.linkCheck(P, Math.floor(Date.now() / 1000));
