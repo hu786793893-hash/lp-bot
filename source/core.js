@@ -218,14 +218,75 @@ function targetShare(widthPct) {
   const a = 1 - Math.sqrt(1 / r), b = 1 - Math.sqrt(l);
   return a / (a + b);
 }
-function planRebalance(P, s, usdc, cfg) {
-  const w = targetShare(cfg.widthPct);
+/**
+ * 2026-10-18（与电脑端机器人 strategy.js 相同）：Raydium 真实存入比例 = 按 tick 间距取整后的区间、在池子当前 sqrt 价格下的比例。
+ * 以前这里用课本公式 targetShare（假设现价正好在区间正中、不取整），区间只有 ±0.75% 时和真实存入比例能差 2–9 个百分点，
+ * 开仓后多出来的那种币就剩在钱包里（链上 10-15 剩约 $7、10-16 约 $33、10-17 约 $10）。
+ */
+function depositShare(P, widthPct, pool) {
+  const { sqrtP, spacing, dA, dB } = pool;
+  const scale = 10 ** (dA - dB);
+  const tk = x => Math.log(x / scale) / Math.log(1.0001);
+  const lo = P * (1 - widthPct / 100), hi = P * (1 + widthPct / 100);
+  const tl = Math.floor(tk(lo) / spacing) * spacing, tu = Math.ceil(tk(hi) / spacing) * spacing;
+  const sa = 1.0001 ** (tl / 2), sb = 1.0001 ** (tu / 2), sp = Math.min(Math.max(sqrtP, sa), sb);
+  const vA = (sb - sp) / (sp * sb) / 10 ** dA * P, vB = (sp - sa) / 10 ** dB;
+  return { w: vA + vB > 0 ? vA / (vA + vB) : 0.5, tickLower: tl, tickUpper: tu, lo: 1.0001 ** tl * scale, hi: 1.0001 ** tu * scale };
+}
+function depositLeftover(w, valA, valB, slipPct) {
+  // 值域（美元）：w = 区间里 AAPLx 价值占比；与 live.buildOpen 的 base/otherMax 逻辑一致
+  const slip = Math.max(0, Number(slipPct) || 0) / 100;
+  let useA = 0.998 * valA, needB = w > 0 ? useA * (1 - w) / w : Infinity;
+  if (valA > 0 && needB * (1 + slip) <= valB) return { left: valA - useA + valB - needB, base: 'A', depA: useA, depB: needB };
+  let useB = 0.998 * valB, needA = w < 1 ? useB * w / (1 - w) : Infinity;
+  if (needA * (1 + slip) > valA && needA > 0) { const k = valA / (needA * (1 + slip)) * 0.999; useB *= k; needA *= k; }
+  if (!isFinite(needA)) { needA = 0; useB = 0; }
+  return { left: valA - needA + valB - useB, base: 'B', depA: needA, depB: useB };
+}
+function fitOpenTicks(P, x, y, cfg, pool) {
+  const nom = depositShare(P, cfg.widthPct, pool);
+  const s = pool.spacing, dA = pool.dA, dB = pool.dB, sqrtP = pool.sqrtP, scale = 10 ** (dA - dB);
+  const slip = Number(cfg.slippagePct) > 0 ? Number(cfg.slippagePct) : 0.5;
+  const V = x * P + y, Vuse = Math.min(V, cfg.maxAmountUsd > 0 ? cfg.maxAmountUsd : V);
+  const mk = (tl, tu) => {
+    const sa = 1.0001 ** (tl / 2), sb = 1.0001 ** (tu / 2), sp = Math.min(Math.max(sqrtP, sa), sb);
+    const vA = (sb - sp) / (sp * sb) / 10 ** dA * P, vB = (sp - sa) / 10 ** dB;
+    return { tickLower: tl, tickUpper: tu, lo: 1.0001 ** tl * scale, hi: 1.0001 ** tu * scale, w: vA + vB > 0 ? vA / (vA + vB) : 0.5 };
+  };
+  // 与 bot 开仓步骤一样的可用上限（目标 ×1.01）；超过本金上限的部分是故意留下的，不算剩币
+  const ev = c => {
+    const xa = Math.min(x, c.w * Vuse / P * 1.01), yb = Math.min(y, (1 - c.w) * Vuse * 1.01);
+    const r = depositLeftover(c.w, xa * P, yb, slip);
+    return Math.max(0, r.left + (x - xa) * P + (y - yb) - (V - Vuse));
+  };
+  const base = mk(nom.tickLower, nom.tickUpper); base.leftoverUsd = ev(base); base.shift = 0;
+  const maxShift = cfg.openFitShift != null ? Math.max(0, Math.floor(Number(cfg.openFitShift) || 0)) : 3;
+  if (cfg.openFitRange === false || maxShift === 0 || !(sqrtP > 0) || !(s > 0)) return { ...base, nominal: base, fitted: false };
+  const t = Math.log(sqrtP * sqrtP) / Math.log(1.0001), W0 = nom.tickUpper - nom.tickLower;
+  const tolW = cfg.openFitWidthTol != null ? Math.max(0, Math.floor(Number(cfg.openFitWidthTol) || 0)) : 2;
+  let best = base;
+  for (let i = -maxShift; i <= maxShift; i++) for (let j = -maxShift; j <= maxShift; j++) {
+    if (!i && !j) continue;
+    const tl = nom.tickLower + i * s, tu = nom.tickUpper + j * s, W = tu - tl;
+    if (W < W0 - tolW * s || W > W0 + tolW * s || W <= 0) continue;
+    if (t - tl < 0.3 * W || tu - t < 0.3 * W) continue;
+    const c = mk(tl, tu); c.leftoverUsd = ev(c); c.shift = Math.abs(i) + Math.abs(j);
+    if (c.leftoverUsd < best.leftoverUsd - 0.05 || (Math.abs(c.leftoverUsd - best.leftoverUsd) <= 0.05 && c.shift < best.shift)) best = c;
+  }
+  return { ...best, nominal: base, fitted: best !== base };
+}
+
+function planRebalance(P, s, usdc, cfg, pool) {
+  const geo = !!(pool && pool.sqrtP > 0 && pool.spacing > 0 && pool.dA != null && pool.dB != null);
+  const ds = geo ? depositShare(P, cfg.widthPct, pool) : null;
+  const w = ds ? ds.w : targetShare(cfg.widthPct);
+  const f = ds ? Math.max(0, Number(cfg.poolFeeRate != null ? cfg.poolFeeRate : 0.001)) : 0; // 兑换按池子手续费放大，换完正好是目标比例
   const V = s * P + usdc;
   const Vuse = Math.min(V, cfg.maxAmountUsd > 0 ? cfg.maxAmountUsd : V);
   const tgtStock = w * Vuse, tgtUsdc = Vuse - tgtStock;
   let side = 'none', usd = 0;
-  if (s * P < tgtStock - 1e-9) { side = 'buy'; usd = tgtStock - s * P; }
-  else if (usdc < tgtUsdc - 1e-9) { side = 'sell'; usd = tgtUsdc - usdc; }
+  if (s * P < tgtStock - 1e-9) { side = 'buy'; usd = (tgtStock - s * P) / (1 - f * (1 - w)); }
+  else if (usdc < tgtUsdc - 1e-9) { side = 'sell'; usd = (tgtUsdc - usdc) / (1 - f * w); }
   const lo = P * (1 - cfg.widthPct / 100), hi = P * (1 + cfg.widthPct / 100);
   const delta = s * P - w * V;
   return { w, V, Vuse, capped: Vuse < V - 1e-9, tgtStock, tgtUsdc, side, usd, tokens: usd / P, lo, hi, delta };
@@ -289,11 +350,13 @@ async function buildSwap(ray, p, side, amountInRaw) {
   return { kind: 'swap', tx: r.transaction, signers: r.signers || [], pd, info: { side, P, execPrice, worst, inH, outH, minOut } };
 }
 
-async function buildOpen(ray, p, lo, hi, availA, availB) {
+async function buildOpen(ray, p, lo, hi, availA, availB, ticks) {
   const pd = await ray.clmm.getPoolInfoFromRpc(POOL_ID);
   const { poolInfo, poolKeys, computePoolInfo } = pd;
   const dA = poolInfo.mintA.decimals, dB = poolInfo.mintB.decimals, slip = p.sl / 100;
-  const rt = rangeTicks(lo, hi, dA, dB, computePoolInfo.tickSpacing);
+  const sp0 = computePoolInfo.tickSpacing, okT = ticks && Number.isInteger(ticks.tickLower) && Number.isInteger(ticks.tickUpper) && ticks.tickLower < ticks.tickUpper && ticks.tickLower % sp0 === 0 && ticks.tickUpper % sp0 === 0;
+  // 2026-10-18：区间 tick 由 fitOpenTicks 直接给出（避免价格→tick 再取整差一格）
+  const rt = okT ? { tickLower: ticks.tickLower, tickUpper: ticks.tickUpper, lo: 1.0001 ** ticks.tickLower * 10 ** (dA - dB), hi: 1.0001 ** ticks.tickUpper * 10 ** (dA - dB) } : rangeTicks(lo, hi, dA, dB, sp0);
   const epochInfo = await ray.fetchEpochInfo();
   const need = async (inputA, amt) => PoolUtils.getLiquidityAmountOutFromAmountIn({ poolInfo, slippage: 0, inputA, tickLower: rt.tickLower, tickUpper: rt.tickUpper, amount: toBN(amt), add: true, amountHasFee: true, epochInfo });
   let base = 'MintA', baseAmt = Math.floor(availA * 0.998), otherMax, res = null;
@@ -305,7 +368,7 @@ async function buildOpen(ray, p, lo, hi, availA, availB) {
     if (baseAmt <= 0) throw new Error('钱包里的 USDC 和 AAPLx 不够开仓');
     res = await need(false, baseAmt); const needA = Number(res.amountA.amount.toString());
     if (needA * (1 + slip) > availA && needA > 0) {
-      const k = availA / (needA * (1 + slip)) * 0.995; baseAmt = Math.floor(baseAmt * k); res = await need(false, baseAmt);
+      const k = availA / (needA * (1 + slip)) * 0.999; // 2026-10-18：原 ×0.995 在滑点余量外又多留 0.5%，改 ×0.999 只防取整 baseAmt = Math.floor(baseAmt * k); res = await need(false, baseAmt);
     }
     otherMax = Math.min(availA, Math.ceil(Number(res.amountA.amount.toString()) * (1 + slip)) + 1);
   }
@@ -495,8 +558,8 @@ async function prepareStep(conn, p, step, opts = {}) {
       `\n这一步只卖出，不开新仓。币只在你钱包和池子之间流动，不会转到别人的地址。`;
     return finish(conn, p, base, b, summary, {});
   }
-  const cfg = { widthPct: p.wd, maxAmountUsd: p.mx };
-  const pl = planRebalance(P, w.x, w.y, cfg);
+  const cfg = { widthPct: p.wd, maxAmountUsd: p.mx, slippagePct: p.sl, poolFeeRate: 0.001 }; // 本页只做 0.1% 池子
+  const pl = planRebalance(P, w.x, w.y, cfg, pool);
   if (step === 'swap') {
     if (pl.side === 'none' || pl.usd < 1) return { ...base, plan: pl, status: 'skip', reason: `不需要兑换：钱包里 ${fmt(w.x, 4)} AAPLx + ${fmt(w.y)} USDC 已接近目标比例（Δ=${fmt(pl.delta)} 美元）。` };
     let limit = p.mx;
@@ -518,11 +581,13 @@ async function prepareStep(conn, p, step, opts = {}) {
     return finish(conn, p, base, b, summary, { plan: pl });
   }
   if (step === 'open') {
-    const availA = Math.min(Number(w.rawA), Math.floor(pl.tgtStock / P * 1.01 * 10 ** pool.dA));
-    const availB = Math.min(Number(w.rawB), Math.floor(pl.tgtUsdc * 1.01 * 10 ** pool.dB));
+    // 2026-10-18：区间在名义区间上下各最多 3 个 tick 间距里挑「按钱包现有两种币存进去剩得最少」的
+    const fit = fitOpenTicks(P, w.x, w.y, cfg, pool);
+    const availA = Math.min(Number(w.rawA), Math.floor(fit.w * pl.Vuse / P * 1.01 * 10 ** pool.dA));
+    const availB = Math.min(Number(w.rawB), Math.floor((1 - fit.w) * pl.Vuse * 1.01 * 10 ** pool.dB));
     if (availA / 10 ** pool.dA * P + availB / 10 ** pool.dB < 1) return { ...base, status: 'refuse', reason: '钱包里没有可开仓的 AAPLx / USDC。' };
     const ray = await loadRaydium(conn, p.w);
-    const b = await buildOpen(ray, p, pl.lo, pl.hi, availA, availB);
+    const b = await buildOpen(ray, p, fit.lo, fit.hi, availA, availB, { tickLower: fit.tickLower, tickUpper: fit.tickUpper });
     const summary = `按池子现价 ${fmt(P)} 开新仓位：区间 ${fmt(b.info.lo)} – ${fmt(b.info.hi)}（±${p.wd}%）。` +
       `\n投入约 ${fmt(b.info.estA, 6)} ${TK} + ${fmt(b.info.estB)} USDC（约 $${fmt(b.info.estA * P + b.info.estB)}），最多 ${fmt(b.info.maxA, 6)} AAPLx / ${fmt(b.info.maxB)} USDC。` +
       `\n会押约 0.01–0.02 SOL 的账户租金（撤仓时退回）。只在这个池子开仓。`;
@@ -562,7 +627,7 @@ module.exports = {
   POOL_ID, CLMM, MINT_A, MINT_B, VAULT_A, VAULT_B, ALLOWED_PROGRAMS, TOKEN, TOKEN22, ATA, SYSTEM, CB, MEMO, DISC,
   encodeLink, decodeLink, normalizeParams, stepsFor, linkCheck, bjStamp,
   makeFetch, makeConnection, readPool, readWallet, positionCreatedAt,
-  targetShare, planRebalance, rangeTicks,
+  targetShare, planRebalance, rangeTicks, depositShare, depositLeftover, fitOpenTicks,
   buildClose, buildSwap, buildOpen, loadRaydium,
   resolveKeys, listIxs, assertSafeTx, prepareStep, partialSign, simulate,
   VersionedTransaction, PublicKey,
