@@ -52,11 +52,20 @@ function binanceLinks(url, chainId) {
   return { bnc, http: 'https://app.binance.com/en/download?_dp=' + dp, clean: (startPageQuery + dp).indexOf('+') < 0 };
 }
 function setupOpenLinks() {
-  const base = location.origin + location.pathname, hash = location.hash || '';
-  let links = null, chosen = base + hash;
-  for (let n = 0; n < 60; n++) { const u = (n === 0 ? base : base + '?b=' + n) + hash; links = binanceLinks(u, 1); chosen = u; if (links.clean) break; }
+  const hash = location.hash || '';
+  const originPath = location.origin + location.pathname;
+  const search0 = location.search || '';
+  const pageFull = originPath + search0 + hash;
+  let links = null, chosen = pageFull;
+  for (let n = 0; n < 60; n++) {
+    const search = (n === 0) ? search0 : (search0 ? (search0 + '&b=' + n) : ('?b=' + n));
+    const u = originPath + search + hash;
+    links = binanceLinks(u, 1);
+    chosen = u;
+    if (links.clean) break;
+  }
   $('openBinance').href = links.http; $('openBinanceBnc').href = links.bnc;
-  $('pageUrl').value = base + hash;
+  $('pageUrl').value = pageFull;
   $('openPhantom').href = 'https://phantom.app/ul/browse/' + encodeURIComponent(chosen) + '?ref=' + encodeURIComponent(location.origin);
 }
 $('copyBtn').addEventListener('click', function () {
